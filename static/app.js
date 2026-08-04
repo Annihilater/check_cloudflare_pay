@@ -39,9 +39,26 @@
     btnClearLog: $("btnClearLog"),
   };
 
+  /** 页面上最多渲染多少个 chip，避免上万 DOM 卡死 */
+  const MAX_VISIBLE_CHIPS = 200;
+  /** 日志里最多连续打印 found 的条数/秒 */
+  const FOUND_LOG_EVERY = 50;
+
   let selectedLength = 3;
+  /** @type {string[]} 全量可用 tag（导出用，不全部渲染） */
   let availableTags = [];
+  /** @type {Set<string>} */
+  let availableSet = new Set();
   let eventSource = null;
+  let isRunning = false;
+  let foundSinceLog = 0;
+  let lastFoundLogAt = 0;
+
+  // 节流：进度 / chip 渲染
+  let pendingProgress = null;
+  let progressRaf = 0;
+  let pendingChips = [];
+  let chipFlushTimer = 0;
 
   const charsetSize = {
     digits: 10,
@@ -123,11 +140,8 @@
     const rangeClamped = range > total ? total : range;
 
     const concurrency = Math.max(1, parseInt(els.concurrency.value, 10) || 1);
-    // 实测约 1s/请求，按并发粗略估
     const estSecs =
-      rangeClamped === 0n
-        ? 0
-        : Number(rangeClamped) / concurrency;
+      rangeClamped === 0n ? 0 : Number(rangeClamped) / concurrency;
 
     updateCharsetCards();
 
@@ -135,6 +149,10 @@
       · 字符集 ${size}<sup>${len}</sup> = ${formatComboCount(total)}
       · 粗估耗时（并发 ${concurrency}，~1s/请求）：<strong>${formatDuration(estSecs)}</strong>`;
 
+    if (concurrency > 30) {
+      els.estimate.innerHTML +=
+        `<br><span style="color:#fbbf24">⚠ 并发 &gt; 30 容易把页面/目标站打满，建议 10–20。</span>`;
+    }
     if (len >= 5 && els.charset.value === "alphanumeric") {
       els.estimate.innerHTML +=
         `<br><span style="color:#fbbf24">⚠ 5 位字母数字约 6046 万组合，全量扫描极慢，建议加前缀/后缀或限制索引范围。</span>`;
@@ -142,6 +160,7 @@
   }
 
   function setStatus(status) {
+    isRunning = status === "running";
     els.statusPill.classList.remove("running", "stopped", "completed", "error");
     const map = {
       idle: "空闲",
@@ -154,12 +173,11 @@
     if (status && status !== "idle") {
       els.statusPill.classList.add(status);
     }
-    const running = status === "running";
-    els.btnStart.disabled = running;
-    els.btnStop.disabled = !running;
+    els.btnStart.disabled = isRunning;
+    els.btnStop.disabled = !isRunning;
   }
 
-  function updateProgress(p) {
+  function applyProgress(p) {
     const total = p.total || 0;
     const checked = p.checked || 0;
     const pct = total > 0 ? Math.min(100, (checked / total) * 100) : 0;
@@ -175,35 +193,138 @@
     if (p.current) els.currentTag.textContent = p.current;
   }
 
+  function updateProgress(p) {
+    pendingProgress = p;
+    if (progressRaf) return;
+    progressRaf = requestAnimationFrame(() => {
+      progressRaf = 0;
+      if (pendingProgress) {
+        applyProgress(pendingProgress);
+        pendingProgress = null;
+      }
+    });
+  }
+
+  function makeChip(tag) {
+    const chip = document.createElement("span");
+    chip.className = "tag-chip";
+    chip.textContent = tag;
+    chip.title = "点击复制";
+    chip.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(tag);
+        log(`已复制: ${tag}`, "info");
+      } catch {
+        log(`复制失败: ${tag}`, "error");
+      }
+    });
+    return chip;
+  }
+
+  function updateBadge() {
+    const n = availableTags.length;
+    const shown = Math.min(n, MAX_VISIBLE_CHIPS);
+    els.resultsBadge.textContent =
+      n > MAX_VISIBLE_CHIPS ? `${formatNumber(n)}（显示最近 ${shown}）` : String(n);
+  }
+
+  /** 只渲染最近 MAX_VISIBLE_CHIPS 个，避免 DOM 爆炸 */
   function renderResults() {
-    els.resultsBadge.textContent = String(availableTags.length);
+    updateBadge();
     els.results.innerHTML = "";
+    if (availableTags.length === 0) return;
+
     const frag = document.createDocumentFragment();
+    if (availableTags.length > MAX_VISIBLE_CHIPS) {
+      const hint = document.createElement("div");
+      hint.className = "results-hint";
+      hint.textContent = `仅显示最近 ${MAX_VISIBLE_CHIPS} 个，完整列表请导出（共 ${formatNumber(availableTags.length)}）`;
+      frag.appendChild(hint);
+    }
+    const start = Math.max(0, availableTags.length - MAX_VISIBLE_CHIPS);
     // 最新的在前
-    for (let i = availableTags.length - 1; i >= 0; i--) {
-      const tag = availableTags[i];
-      const chip = document.createElement("span");
-      chip.className = "tag-chip";
-      chip.textContent = tag;
-      chip.title = "点击复制";
-      chip.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(tag);
-          log(`已复制: ${tag}`, "info");
-        } catch {
-          log(`复制失败: ${tag}`, "error");
-        }
-      });
-      frag.appendChild(chip);
+    for (let i = availableTags.length - 1; i >= start; i--) {
+      frag.appendChild(makeChip(availableTags[i]));
     }
     els.results.appendChild(frag);
   }
 
-  function addAvailable(tag) {
-    if (!availableTags.includes(tag)) {
-      availableTags.push(tag);
-      renderResults();
+  function flushPendingChips() {
+    chipFlushTimer = 0;
+    if (pendingChips.length === 0) return;
+
+    const batch = pendingChips;
+    pendingChips = [];
+
+    // 最新的插到前面
+    const frag = document.createDocumentFragment();
+    for (let i = batch.length - 1; i >= 0; i--) {
+      frag.appendChild(makeChip(batch[i]));
     }
+
+    // 去掉「空状态」；若有 hint 保留在最前
+    let first = els.results.firstChild;
+    if (first && first.classList && first.classList.contains("results-hint")) {
+      els.results.insertBefore(frag, first.nextSibling);
+    } else {
+      els.results.insertBefore(frag, els.results.firstChild);
+    }
+
+    // 超出可见上限则从尾部删
+    while (els.results.childElementCount > MAX_VISIBLE_CHIPS + 1) {
+      els.results.removeChild(els.results.lastChild);
+    }
+    // 若刚超过阈值，补一条提示
+    if (
+      availableTags.length > MAX_VISIBLE_CHIPS &&
+      !(els.results.firstChild && els.results.firstChild.classList?.contains("results-hint"))
+    ) {
+      const hint = document.createElement("div");
+      hint.className = "results-hint";
+      hint.textContent = `仅显示最近 ${MAX_VISIBLE_CHIPS} 个，完整列表请导出（共 ${formatNumber(availableTags.length)}）`;
+      els.results.insertBefore(hint, els.results.firstChild);
+    }
+
+    updateBadge();
+  }
+
+  function addAvailable(tag, opts = {}) {
+    if (!tag || availableSet.has(tag)) return;
+    availableSet.add(tag);
+    availableTags.push(tag);
+
+    if (opts.silent) {
+      updateBadge();
+      return;
+    }
+
+    pendingChips.push(tag);
+    if (!chipFlushTimer) {
+      // 批量刷 DOM，高并发时每 200ms 画一次
+      chipFlushTimer = setTimeout(flushPendingChips, 200);
+    }
+
+    // found 日志节流
+    foundSinceLog += 1;
+    const now = Date.now();
+    if (foundSinceLog === 1 || foundSinceLog % FOUND_LOG_EVERY === 0 || now - lastFoundLogAt > 2000) {
+      log(`可用 +${foundSinceLog} · 最近: ${tag} · 累计 ${availableTags.length}`, "found");
+      foundSinceLog = 0;
+      lastFoundLogAt = now;
+    }
+  }
+
+  function resetResults() {
+    availableTags = [];
+    availableSet = new Set();
+    pendingChips = [];
+    if (chipFlushTimer) {
+      clearTimeout(chipFlushTimer);
+      chipFlushTimer = 0;
+    }
+    foundSinceLog = 0;
+    els.results.innerHTML = "";
+    updateBadge();
   }
 
   function log(msg, level = "") {
@@ -212,10 +333,13 @@
     const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
     line.textContent = `[${ts}] ${msg}`;
     els.log.appendChild(line);
-    els.log.scrollTop = els.log.scrollHeight;
     // 限制日志条数
-    while (els.log.children.length > 500) {
+    while (els.log.children.length > 200) {
       els.log.removeChild(els.log.firstChild);
+    }
+    // 滚动节流：仅接近底部时跟着滚
+    if (els.log.scrollHeight - els.log.scrollTop - els.log.clientHeight < 80) {
+      els.log.scrollTop = els.log.scrollHeight;
     }
   }
 
@@ -241,8 +365,7 @@
     switch (data.type) {
       case "started":
         setStatus("running");
-        availableTags = [];
-        renderResults();
+        resetResults();
         updateProgress({
           checked: 0,
           total: data.total,
@@ -257,18 +380,27 @@
         break;
       case "progress":
         updateProgress(data);
+        // 用服务端计数校正 badge（SSE 可能丢 found）
+        if (typeof data.available === "number") {
+          els.statAvailable.textContent = formatNumber(data.available);
+          if (data.available > availableTags.length) {
+            els.resultsBadge.textContent =
+              data.available > MAX_VISIBLE_CHIPS
+                ? `${formatNumber(data.available)}（显示最近 ${Math.min(availableTags.length, MAX_VISIBLE_CHIPS)}）`
+                : String(data.available);
+          }
+        }
         break;
       case "found":
         addAvailable(data.result.tag);
-        log(`可用: ${data.result.tag}`, "found");
         break;
       case "checked":
-        // 默认不刷占用日志，避免刷屏
         break;
       case "error":
         log(data.message, "error");
         break;
       case "finished":
+        flushPendingChips();
         setStatus(data.status);
         updateProgress({
           checked: data.checked,
@@ -284,32 +416,49 @@
           `结束 [${data.status}] 检查 ${formatNumber(data.checked)} · 可用 ${data.available} · 占用 ${data.taken} · 错误 ${data.errors} · 用时 ${formatDuration(data.elapsed_secs)}`,
           "info"
         );
-        refreshStatus();
+        // 结束后再全量同步一次结果（用于导出）
+        syncResultsFromServer();
         break;
     }
   }
 
-  async function refreshStatus() {
+  async function refreshStatus({ syncResults = false } = {}) {
     try {
       const res = await fetch("/api/scan/status");
       const data = await res.json();
       setStatus(data.status);
       if (data.progress) {
-        updateProgress({
-          ...data.progress,
-          current: data.progress.current,
-        });
+        updateProgress(data.progress);
         if (data.progress.current) {
           els.currentTag.textContent = data.progress.current;
         }
       }
-      if (data.results_count != null) {
-        // 同步结果列表
-        const r = await fetch("/api/scan/results");
-        const list = await r.json();
-        availableTags = list.map((x) => x.tag);
-        renderResults();
+      // 扫描中不要反复拉上万条结果，只在结束/手动时同步
+      if (syncResults || data.status !== "running") {
+        if (data.results_count > 0 && data.results_count !== availableTags.length) {
+          await syncResultsFromServer();
+        }
+      } else if (data.results_count != null) {
+        updateBadgeFromCount(data.results_count);
       }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function updateBadgeFromCount(n) {
+    const shown = Math.min(availableTags.length, MAX_VISIBLE_CHIPS);
+    els.resultsBadge.textContent =
+      n > MAX_VISIBLE_CHIPS ? `${formatNumber(n)}（显示最近 ${shown}）` : String(n);
+  }
+
+  async function syncResultsFromServer() {
+    try {
+      const r = await fetch("/api/scan/results");
+      const list = await r.json();
+      availableTags = list.map((x) => x.tag);
+      availableSet = new Set(availableTags);
+      renderResults();
     } catch (e) {
       console.error(e);
     }
@@ -318,10 +467,17 @@
   function buildConfig() {
     const length = getLength();
     const endRaw = els.endIndex.value.trim();
+    let concurrency = parseInt(els.concurrency.value, 10) || 10;
+    if (concurrency > 50) {
+      // 前端硬限，避免再次卡死
+      concurrency = 50;
+      els.concurrency.value = "50";
+      log("并发已限制为 50（过高会导致页面卡顿）", "info");
+    }
     return {
       length,
       charset: els.charset.value,
-      concurrency: parseInt(els.concurrency.value, 10) || 10,
+      concurrency,
       delay_ms: parseInt(els.delayMs.value, 10) || 0,
       prefix: els.prefix.value.trim() || null,
       suffix: els.suffix.value.trim() || null,
@@ -348,6 +504,7 @@
         alert(data.message || "启动失败");
         return;
       }
+      resetResults();
       log(data.message, "info");
       setStatus("running");
     } catch (e) {
@@ -379,6 +536,7 @@
       if (data.available) {
         els.singleResult.innerHTML = `<span class="ok">✓ 可用：${data.normalized || tag}</span>`;
         addAvailable(data.tag || tag);
+        flushPendingChips();
       } else {
         els.singleResult.innerHTML = `<span class="no">✗ 已占用：${data.normalized || tag}${
           data.code ? ` (${data.code})` : ""
@@ -386,6 +544,26 @@
       }
     } catch (e) {
       els.singleResult.innerHTML = `<span class="no">${e}</span>`;
+    }
+  }
+
+  async function exportTags(asJson) {
+    // 导出前尽量从服务端拉全量，避免 SSE 丢事件
+    if (isRunning || availableTags.length === 0) {
+      await syncResultsFromServer();
+    }
+    if (asJson) {
+      download(
+        `available-tags-${Date.now()}.json`,
+        JSON.stringify(availableTags, null, 2),
+        "application/json"
+      );
+    } else {
+      download(
+        `available-tags-${Date.now()}.txt`,
+        availableTags.join("\n") + (availableTags.length ? "\n" : ""),
+        "text/plain"
+      );
     }
   }
 
@@ -459,17 +637,8 @@
     if (e.key === "Enter") checkOne();
   });
 
-  els.btnExport.addEventListener("click", () => {
-    download(
-      `available-tags-${Date.now()}.json`,
-      JSON.stringify(availableTags, null, 2),
-      "application/json"
-    );
-  });
-
-  els.btnExportTxt.addEventListener("click", () => {
-    download(`available-tags-${Date.now()}.txt`, availableTags.join("\n") + "\n", "text/plain");
-  });
+  els.btnExport.addEventListener("click", () => exportTags(true));
+  els.btnExportTxt.addEventListener("click", () => exportTags(false));
 
   els.btnClear.addEventListener("click", async () => {
     if (!confirm("确定清空已发现的可用标签？")) return;
@@ -478,8 +647,7 @@
     } catch {
       /* ignore */
     }
-    availableTags = [];
-    renderResults();
+    resetResults();
   });
 
   els.btnClearLog.addEventListener("click", () => {
@@ -489,13 +657,13 @@
   // init
   updateEstimate();
   connectSSE();
-  refreshStatus();
-  // 定时同步状态（SSE 丢事件时兜底）
+  refreshStatus({ syncResults: true });
+  // 扫描中只同步状态，不拉全量结果
   setInterval(() => {
-    if (els.statusText.textContent === "扫描中") {
-      refreshStatus();
+    if (isRunning) {
+      refreshStatus({ syncResults: false });
     }
-  }, 5000);
+  }, 3000);
 
   log("就绪。请配置字符长度后开始扫描。", "info");
 })();

@@ -625,6 +625,17 @@ select.input {
   font-size: 0.88rem;
 }
 
+.results-hint {
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+}
+
 .log {
   height: 200px;
   overflow: auto;

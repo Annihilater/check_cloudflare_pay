@@ -49,8 +49,8 @@ fn validate_config(cfg: &ScanConfig) -> Result<(), String> {
     if !(3..=8).contains(&cfg.length) {
         return Err("length 必须在 3–8 之间（站点最少 3 字符）".into());
     }
-    if cfg.concurrency == 0 || cfg.concurrency > 100 {
-        return Err("concurrency 必须在 1–100 之间".into());
+    if cfg.concurrency == 0 || cfg.concurrency > 50 {
+        return Err("concurrency 必须在 1–50 之间（过高会导致页面卡顿）".into());
     }
     if cfg.delay_ms > 60_000 {
         return Err("delay_ms 过大".into());

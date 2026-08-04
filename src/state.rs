@@ -201,7 +201,8 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(4096);
+        // 高并发 found 事件较多，加大缓冲减少接收端 Lagged
+        let (tx, _) = broadcast::channel(16384);
         Self {
             inner: Arc::new(RwLock::new(InnerState::default())),
             events: tx,

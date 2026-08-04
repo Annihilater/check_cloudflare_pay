@@ -220,9 +220,12 @@ pub async fn run_scan(state: AppState, cancel: Arc<AtomicBool>) {
                 let body = combination_at(index, length, &chars);
                 let tag = format!("{prefix}{body}{suffix}");
 
-                {
-                    let mut s = state.inner.write();
-                    s.progress.current = tag.clone();
+                // 避免每个请求都抢写锁更新 current（高并发会拖死）
+                let n = checked.load(Ordering::Relaxed);
+                if n % 32 == 0 {
+                    if let Some(mut s) = state.inner.try_write() {
+                        s.progress.current = tag.clone();
+                    }
                 }
 
                 if delay > Duration::ZERO {
@@ -238,18 +241,16 @@ pub async fn run_scan(state: AppState, cancel: Arc<AtomicBool>) {
                                 let mut s = state.inner.write();
                                 s.results.push(result.clone());
                             }
-                            emit(&state, ScanEvent::Found { result });
+                            // 通道满时丢弃单条 found，进度计数仍准确
+                            let _ = state.events.send(ScanEvent::Found { result });
                         } else {
                             taken.fetch_add(1, Ordering::Relaxed);
                             if !only_available {
-                                emit(
-                                    &state,
-                                    ScanEvent::Checked {
-                                        tag: result.tag,
-                                        available: false,
-                                        code: result.code,
-                                    },
-                                );
+                                let _ = state.events.send(ScanEvent::Checked {
+                                    tag: result.tag,
+                                    available: false,
+                                    code: result.code,
+                                });
                             }
                         }
                     }

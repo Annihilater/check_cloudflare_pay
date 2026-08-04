@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cloudflare Pay Tag 扫描器</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="bg-grid"></div>
+    <div class="app">
+      <header class="header">
+        <div class="brand">
+          <div class="logo">CF</div>
+          <div>
+            <h1>Cloudflare Pay Tag 扫描器</h1>
+            <p class="subtitle">探测 cloudflare.pay 用户名占用情况</p>
+          </div>
+        </div>
+        <div class="status-pill" id="statusPill">
+          <span class="dot"></span>
+          <span id="statusText">空闲</span>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel controls">
+          <h2>扫描配置</h2>
+
+          <div class="field">
+            <label>字符长度</label>
+            <div class="length-group" id="lengthGroup">
+              <button type="button" class="len-btn active" data-len="3">3</button>
+              <button type="button" class="len-btn" data-len="4">4</button>
+              <button type="button" class="len-btn" data-len="5">5</button>
+              <button type="button" class="len-btn" data-len="6">6</button>
+              <button type="button" class="len-btn" data-len="custom">自定义</button>
+            </div>
+            <input
+              type="number"
+              id="customLength"
+              class="input hidden"
+              min="3"
+              max="8"
+              value="3"
+              placeholder="3–8"
+            />
+          </div>
+
+          <div class="field">
+            <label>字符集</label>
+            <div class="charset-group" id="charsetGroup" role="radiogroup" aria-label="字符集">
+              <button
+                type="button"
+                class="charset-card active"
+                role="radio"
+                aria-checked="true"
+                data-charset="alphanumeric"
+                data-size="36"
+              >
+                <div class="charset-card-top">
+                  <span class="charset-name">字母 + 数字</span>
+                  <span class="charset-badge">36 种</span>
+                </div>
+                <code class="charset-sample">a–z · 0–9</code>
+                <div class="charset-meta">
+                  <span class="charset-range">完整扫描范围最大</span>
+                  <span class="charset-combos" data-combos>—</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                class="charset-card"
+                role="radio"
+                aria-checked="false"
+                data-charset="letters"
+                data-size="26"
+              >
+                <div class="charset-card-top">
+                  <span class="charset-name">仅字母</span>
+                  <span class="charset-badge">26 种</span>
+                </div>
+                <code class="charset-sample">a b c … x y z</code>
+                <div class="charset-meta">
+                  <span class="charset-range">适合短域名风格</span>
+                  <span class="charset-combos" data-combos>—</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                class="charset-card"
+                role="radio"
+                aria-checked="false"
+                data-charset="digits"
+                data-size="10"
+              >
+                <div class="charset-card-top">
+                  <span class="charset-name">仅数字</span>
+                  <span class="charset-badge">10 种</span>
+                </div>
+                <code class="charset-sample">0 1 2 … 7 8 9</code>
+                <div class="charset-meta">
+                  <span class="charset-range">组合少，扫得快</span>
+                  <span class="charset-combos" data-combos>—</span>
+                </div>
+              </button>
+            </div>
+            <input type="hidden" id="charset" value="alphanumeric" />
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label>并发数</label>
+              <input type="number" id="concurrency" class="input" min="1" max="100" value="10" />
+            </div>
+            <div class="field">
+              <label>请求延迟 (ms)</label>
+              <input type="number" id="delayMs" class="input" min="0" max="60000" value="0" />
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label>前缀（可选）</label>
+              <input type="text" id="prefix" class="input mono" placeholder="例如 cf" maxlength="16" />
+            </div>
+            <div class="field">
+              <label>后缀（可选）</label>
+              <input type="text" id="suffix" class="input mono" placeholder="例如 01" maxlength="16" />
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label>起始索引</label>
+              <input type="number" id="startIndex" class="input" min="0" value="0" />
+            </div>
+            <div class="field">
+              <label>结束索引（空=全部）</label>
+              <input type="number" id="endIndex" class="input" min="1" placeholder="留空=全部" />
+            </div>
+          </div>
+
+          <div class="estimate" id="estimate">
+            预计组合数：<strong>—</strong>
+          </div>
+
+          <div class="actions">
+            <button id="btnStart" class="btn primary">开始扫描</button>
+            <button id="btnStop" class="btn danger" disabled>停止</button>
+          </div>
+
+          <div class="divider"></div>
+
+          <h2>单次查询</h2>
+          <div class="check-row">
+            <input type="text" id="singleTag" class="input mono" placeholder="输入 tag，如 cto" />
+            <button id="btnCheck" class="btn secondary">查询</button>
+          </div>
+          <div id="singleResult" class="single-result"></div>
+        </section>
+
+        <section class="panel progress-panel">
+          <h2>进度</h2>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <div class="progress-meta">
+            <span id="progressPct">0%</span>
+            <span id="progressCount">0 / 0</span>
+          </div>
+
+          <div class="stats">
+            <div class="stat">
+              <div class="stat-label">可用</div>
+              <div class="stat-value available" id="statAvailable">0</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">已占用</div>
+              <div class="stat-value taken" id="statTaken">0</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">错误</div>
+              <div class="stat-value errors" id="statErrors">0</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">速率</div>
+              <div class="stat-value" id="statRate">0/s</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">已用时</div>
+              <div class="stat-value" id="statElapsed">0s</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">预计剩余</div>
+              <div class="stat-value" id="statEta">—</div>
+            </div>
+          </div>
+
+          <div class="current">
+            当前：<code id="currentTag">—</code>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="results-header">
+            <h2>可用标签 <span class="badge" id="resultsBadge">0</span></h2>
+            <div class="results-actions">
+              <button id="btnExport" class="btn ghost">导出 JSON</button>
+              <button id="btnExportTxt" class="btn ghost">导出 TXT</button>
+              <button id="btnClear" class="btn ghost">清空</button>
+            </div>
+          </div>
+          <div class="results" id="results"></div>
+        </section>
+
+        <section class="panel log-panel">
+          <div class="results-header">
+            <h2>事件日志</h2>
+            <button id="btnClearLog" class="btn ghost">清空日志</button>
+          </div>
+          <div class="log" id="log"></div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <span>API：https://cloudflare.pay/api/check</span>
+        <span>站点最少 3 字符 · 请合理控制并发，避免对目标站造成压力</span>
+      </footer>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -54,23 +54,23 @@
           </div>
 
           <div class="field">
-            <label>字符集</label>
+            <label>字符集 <span class="label-hint">可切换全数字 / 全字母 / 混合</span></label>
             <div class="charset-group" id="charsetGroup" role="radiogroup" aria-label="字符集">
               <button
                 type="button"
-                class="charset-card active"
+                class="charset-card"
                 role="radio"
-                aria-checked="true"
-                data-charset="alphanumeric"
-                data-size="36"
+                aria-checked="false"
+                data-charset="digits"
+                data-size="10"
               >
                 <div class="charset-card-top">
-                  <span class="charset-name">字母 + 数字</span>
-                  <span class="charset-badge">36 种</span>
+                  <span class="charset-name">全数字</span>
+                  <span class="charset-badge">10 种</span>
                 </div>
-                <code class="charset-sample">a–z · 0–9</code>
+                <code class="charset-sample">0123456789</code>
                 <div class="charset-meta">
-                  <span class="charset-range">完整扫描范围最大</span>
+                  <span class="charset-range">3 位仅 1000 个，最快</span>
                   <span class="charset-combos" data-combos>—</span>
                 </div>
               </button>
@@ -83,30 +83,30 @@
                 data-size="26"
               >
                 <div class="charset-card-top">
-                  <span class="charset-name">仅字母</span>
+                  <span class="charset-name">全字母</span>
                   <span class="charset-badge">26 种</span>
                 </div>
-                <code class="charset-sample">a b c … x y z</code>
+                <code class="charset-sample">abcdefghijklmnopqrstuvwxyz</code>
                 <div class="charset-meta">
-                  <span class="charset-range">适合短域名风格</span>
+                  <span class="charset-range">3 位约 1.7 万，适合短名</span>
                   <span class="charset-combos" data-combos>—</span>
                 </div>
               </button>
               <button
                 type="button"
-                class="charset-card"
+                class="charset-card active"
                 role="radio"
-                aria-checked="false"
-                data-charset="digits"
-                data-size="10"
+                aria-checked="true"
+                data-charset="alphanumeric"
+                data-size="36"
               >
                 <div class="charset-card-top">
-                  <span class="charset-name">仅数字</span>
-                  <span class="charset-badge">10 种</span>
+                  <span class="charset-name">字母 + 数字</span>
+                  <span class="charset-badge">36 种</span>
                 </div>
-                <code class="charset-sample">0 1 2 … 7 8 9</code>
+                <code class="charset-sample">a–z · 0–9 混合</code>
                 <div class="charset-meta">
-                  <span class="charset-range">组合少，扫得快</span>
+                  <span class="charset-range">3 位约 4.6 万，范围最大</span>
                   <span class="charset-combos" data-combos>—</span>
                 </div>
               </button>

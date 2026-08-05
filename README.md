@@ -34,8 +34,27 @@ GET https://cloudflare.pay/api/check?tag={name}
 
 ## 运行
 
+需要 Rust 1.75+。
+
+### 启停脚本（推荐）
+
 ```bash
-# 需要 Rust 1.75+
+./start.sh              # 后台启动（首次会自动 release 编译）
+./stop.sh               # 停止
+./scripts/status.sh     # 查看状态 / 扫描进度
+./scripts/restart.sh    # 重启
+
+./start.sh --build      # 强制重新编译后启动
+./start.sh --fg         # 前台运行
+PORT=9000 ./start.sh    # 指定端口
+```
+
+日志：`.run/check_cloudflare_pay.log`  
+PID：`.run/check_cloudflare_pay.pid`
+
+### 直接运行
+
+```bash
 cargo run --release
 ```
 
